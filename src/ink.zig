@@ -1,5 +1,6 @@
 const std = @import("std");
 const mem = std.mem;
+const meta = std.meta;
 
 pub const SignalLogic = struct {
     const Self = @This();
@@ -281,3 +282,5 @@ pub fn StaticGrid(comptime T: type, comptime grid_width: usize, comptime grid_he
         
     };
 }
+
+

@@ -904,9 +904,33 @@ pub const Mouse = struct {
     middle: bool,
     right: bool,
     
-    pub fn get(comptime T: Type) Mouse {
+    /// True if mouse information was queried as global.
+    is_global: bool,
+    
+    pub fn init() Mouse {
+        return getImpl(.Relative);
+    }
+    
+    pub fn update(self: *@This()) void {
+        self.* = getImpl(.Relative);
+    }
+    
+    /// Global mouse not necessarily recommended. Might be slower than .Relative, according to the SDL wiki, since it queries the OS.
+    pub fn initGlobal() Mouse {
+        return getImpl(.Global);
+    }
+    
+    /// Global mouse not necessarily recommended. Might be slower than .Relative, according to the SDL wiki, since it queries the OS.
+    pub fn updateGlobal(self: *@This()) void {
+        self.* = getImpl(.Global);
+    }
+    
+    
+    
+    /// Implementation detail. Returns either the global or the focused mouse information.
+    fn getImpl(comptime T: Type) Mouse {
         
-        const func = switch(T) {
+        const getMouseFunc = switch(T) {
             .Relative => c.SDL_GetMouseState,
             .Global => c.SDL_GetGlobalMouseState,
         };
@@ -914,7 +938,7 @@ pub const Mouse = struct {
         var x: c_int = 0;
         var y: c_int = 0;
         
-        const mask = func(&x, &y);
+        const mask = getMouseFunc(&x, &y);
         const left   = (mask & c.SDL_BUTTON_LMASK) != 0;
         const middle = (mask & c.SDL_BUTTON_MMASK) != 0;
         const right  = (mask & c.SDL_BUTTON_RMASK) != 0;
@@ -925,14 +949,12 @@ pub const Mouse = struct {
             .left = left,
             .middle = middle,
             .right = right,
+            .is_global = T == .Global,
         };
         
     }
     
-    const Type = enum {
-        Relative,
-        Global, /// Not necessarily recommended. Might be slower than .Relative, according to the SDL wiki, since it queries the OS.
-    };
+    const Type = enum { Relative, Global };
     
 };
 
@@ -943,6 +965,8 @@ pub const Keyboard = struct {
         const sdl_scancode = @enumToInt(scancode);
         return kb[@intCast(usize, sdl_scancode)] != 0;
     }
+    
+    
     
     /// Mirrors the SDL_Scancode enum, except names are all lowercase, and excludes the 'SDL_SCANCODE' prefix.
     /// For any of the number keys, use @"n" to refer to the enum name. This is a limitation of consistency,
