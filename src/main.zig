@@ -27,17 +27,16 @@ pub fn main() !void {
         break :game_init Game {
             .app = app,
             .allocator = general_purpose_allocator,
-            .grid = try Game.Grid.init(general_purpose_allocator, @intCast(usize, app.context.wnd.getSize().w) / 10, @intCast(usize, app.context.wnd.getSize().h) / 10),
+            .grid = try Game.Grid.init(general_purpose_allocator, @intCast(usize, app.context.wnd.getSize().w) / 2, @intCast(usize, app.context.wnd.getSize().h) / 2),
             .visual_config = .{
                 .origin = .{.x = 0, .y = 0},
-                .cells = .{.w = 10, .h = 10},
+                .cells = .{.w = 2, .h = 2},
                 .separation = .{.w = 0, .h = 0},
             },
         };
         
     };
     defer game.deinit();
-    
     
     var timer = ink.Timer(.Milliseconds){};
     mainloop: while (true) {
@@ -67,25 +66,6 @@ pub fn main() !void {
         
         try game.update();
         
-        //for (game.grid.array_list.items) |*current_cell, current_cell_idx| {
-        //    const current_coord = game.grid.indexToCoord(current_cell_idx);
-        //    const real_position = game.visual_config.realPositionOf(current_coord.x, current_coord.y);
-            
-        //    paint_brush: {
-        //        const mouse_state = game.app.input.mouse;
-        //        const mouse_align_horizontal = mouse_state.x >= real_position.x and mouse_state.x <= real_position.x + game.visual_config.cells.w;
-        //        const mouse_align_vertical   = mouse_state.y >= real_position.y and mouse_state.y <= real_position.y + game.visual_config.cells.h;
-                
-        //        if (mouse_align_horizontal and mouse_align_vertical and mouse_state.left) {
-        //            current_cell.* = game.brush.get().*;
-        //        }
-                
-        //    break :paint_brush; }
-            
-        //    try current_cell.update(&game, current_cell_idx);
-        //    try current_cell.draw(&game, current_cell_idx);
-        //}
-        
         game.app.context.rnd.drawUpdate();
     }
 }
@@ -104,6 +84,12 @@ const Game = struct {
     allocator: *std.mem.Allocator,
     rng: std.rand.Xoroshiro128 = std.rand.Xoroshiro128.init(127),
     
+    mouse_signals: struct {
+        lmb: ink.SignalLogic = .{},
+        rmb: ink.SignalLogic = .{},
+        mmb: ink.SignalLogic = .{},
+    } = .{},
+    
     pub fn deinit(self: *Game) void {
         self.app.deinit();
         self.grid.deinit(self.allocator);
@@ -111,6 +97,13 @@ const Game = struct {
     
     
     pub fn update(self: *Game) !void {
+        
+        mouse_update: {
+            self.app.input.mouse.update();
+            self.mouse_signals.lmb.update(self.app.input.mouse.left);
+            self.mouse_signals.rmb.update(self.app.input.mouse.right);
+            self.mouse_signals.mmb.update(self.app.input.mouse.middle);
+        break :mouse_update;}
         
         try self.next_frame.array_list.ensureTotalCapacity(self.allocator, self.grid.size());
         try self.next_frame.array_list.resize(self.allocator, self.grid.size());
@@ -127,7 +120,7 @@ const Game = struct {
                 const mouse_align_horizontal = mouse_state.x >= real_position.x and mouse_state.x <= real_position.x + self.visual_config.cells.w;
                 const mouse_align_vertical   = mouse_state.y >= real_position.y and mouse_state.y <= real_position.y + self.visual_config.cells.h;
                 
-                if (mouse_align_horizontal and mouse_align_vertical and mouse_state.left) {
+                if (mouse_align_horizontal and mouse_align_vertical and (self.mouse_signals.rmb.turnsOn() or mouse_state.left)) {
                     self.next_frame.at(current_coord.x, current_coord.y).* = self.brush.get().*;
                 }
                 
@@ -164,6 +157,7 @@ const Game = struct {
             .{ .Empty = .{} },
             .{ .Stone = .{} },
             .{ .Sand  = .{} },
+            .{ .Water  = .{} },
         };
         comptime {
             inline for(@typeInfo(std.meta.TagType(Cell)).Enum.fields) |field, field_idx| {
@@ -333,7 +327,7 @@ const Game = struct {
         /// Returns the Coordinate south-west to this one if it exists, null otherwise.
         pub fn southWest(self: @This(), param: Height) ?Coord {
             const south_y = if (self.south(.{.height = param.height})) |south_coord| south_coord.y else return null;
-            const west_x = if (self.west(grid)) |west_coord| west_coord.x else return null;
+            const west_x = if (self.west()) |west_coord| west_coord.x else return null;
             return Coord {.x = west_x, .y = south_y};
         }
         
@@ -345,6 +339,7 @@ const Game = struct {
         Empty: Empty,
         Stone: Stone,
         Sand: Sand,
+        Water: Water,
         
         const Empty = struct {
             garbage: u1 = 0,
@@ -394,22 +389,25 @@ const Game = struct {
         const Sand = struct {
             
             pub fn update(self: *@This(), game: *Game, self_idx: usize) !void {
-                const coord = game.grid.indexToCoord(self_idx);
+                const random_n = game.rng.random.intRangeAtMost(u8, 0, 10);
+                
                 const grid_width = .{.width = game.grid.width()};
                 const grid_height = .{.height = game.grid.height()};
                 
+                const coord = game.grid.indexToCoord(self_idx);
                 const coord_south = coord.south(grid_height) orelse return;
                 
-                const south_cell_ptr = game.next_frame.at(coord_south.x, coord_south.y);
-                const current_cell_ptr = game.next_frame.at(coord.x, coord.y);
+                const cell_dst_coord = switch(random_n) {
+                    0...8 => coord_south,
+                    9     => coord_south.east(grid_width) orelse return,
+                    10    => coord_south.west() orelse return,
+                    else => unreachable,
+                };
                 
-                
-                switch(south_cell_ptr.*) {
-                    .Empty => {
-                        const copy = south_cell_ptr.*;
-                        south_cell_ptr.* = current_cell_ptr.*;
-                        current_cell_ptr.* = copy;
-                    },
+                const this_cell: *Cell = game.next_frame.at(coord.x, coord.y);
+                const cell_dst: *Cell = game.next_frame.at(cell_dst_coord.x, cell_dst_coord.y);
+                switch(cell_dst.*) {
+                    .Empty, .Water => swapCells(cell_dst, this_cell),
                     else => {},
                 }
                 
@@ -435,11 +433,75 @@ const Game = struct {
             
         };
         
+        const Water = struct {
+            
+            pub fn update(self: *@This(), game: *Game, self_idx: usize) !void {
+                const random_n = game.rng.random.intRangeAtMost(u8, 1, 30);
+                
+                const grid_width = .{.width = game.grid.width()};
+                const grid_height = .{.height = game.grid.height()};
+                const grid_size = .{.width = grid_width.width, .height = grid_height.height};
+                
+                const coord = game.grid.indexToCoord(self_idx);
+                
+                const potential_cell_dst_coord = switch(random_n) {
+                    01...10   => coord.south(grid_height),
+                    11...20   => coord.southEast(grid_size),
+                    21...30   => coord.southWest(grid_height),
+                    else => unreachable,
+                };
+                
+                const potential_adj_cell_dst_coord = switch(random_n) {
+                    01...15 => coord.west(),
+                    16...30 => coord.east(grid_width),
+                    else => unreachable,
+                };
+                const this_cell = game.next_frame.at(coord.x, coord.y);
+                
+                if (potential_cell_dst_coord) |cell_dst_coord| {
+                    const dest_cell = game.next_frame.at(cell_dst_coord.x, cell_dst_coord.y);
+                    switch(dest_cell.*) {
+                        .Empty => { swapCells(this_cell, dest_cell); return; },
+                        else => {},
+                    }
+                }
+                
+                if (potential_adj_cell_dst_coord) |cell_dst_coord| {
+                    const dest_cell = game.next_frame.at(cell_dst_coord.x, cell_dst_coord.y);
+                    switch(dest_cell.*) {
+                        .Empty => swapCells(this_cell, dest_cell),
+                        else => {},
+                    }
+                }
+                
+            }
+            
+            pub fn draw(self: *const @This(), game: *const Game, self_idx: usize) !void {
+                
+                const rnd = game.app.context.rnd;
+                const coord = game.grid.indexToCoord(self_idx);
+                const pos = game.visual_config.realPositionOf(coord.x, coord.y);
+                const size = game.visual_config.cells;
+                
+                try rnd.drawColor(sdl.Color.blue);
+                try rnd.drawRect(.i, .{
+                        .x = @intCast(c_int, pos.x),
+                        .y = @intCast(c_int, pos.y),
+                        .w = @intCast(c_int, size.w),
+                        .h = @intCast(c_int, size.h)
+                    }, .Full
+                );
+                
+            }
+            
+        };
+        
         pub fn update(self: *@This(), game: *Game, self_idx: usize) !void {
             switch(self.*) {
                 .Empty       => |*cell| try cell.update(game, self_idx),
                 .Stone       => |*cell| try cell.update(game, self_idx),
                 .Sand        => |*cell| try cell.update(game, self_idx),
+                .Water       => |*cell| try cell.update(game, self_idx),
             }
         }
         
@@ -448,8 +510,15 @@ const Game = struct {
                 .Empty =>           |*cell| try cell.draw(game, self_idx),
                 .Stone =>           |*cell| try cell.draw(game, self_idx),
                 .Sand =>            |*cell| try cell.draw(game, self_idx),
+                .Water =>           |*cell| try cell.draw(game, self_idx),
             }
             
+        }
+        
+        pub fn swapCells(a: *Cell, b: *Cell) void {
+            const copy = b.*;
+            b.* = a.*;
+            a.* = copy;
         }
         
     };
