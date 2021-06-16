@@ -2,6 +2,10 @@ const std = @import("std");
 const ink = @import("ink.zig");
 const sdl = @import("sdl.zig");
 
+fn printTypeId(comptime T: type) void {
+    std.debug.print("'{s}': {}\n", .{@typeName(T), ink.TypeId.of(T)});
+}
+
 pub fn main() !void {
     
     var gpa = std.heap.GeneralPurposeAllocator(.{.verbose_log = false}){};
@@ -42,44 +46,11 @@ pub fn main() !void {
     }
 }
 
-const Game = struct {
-    wnd: sdl.Window,
-    rnd: sdl.Renderer,
-    evt: sdl.Event = .{},
-    mempool: MemPoolAllocator,
+const EntityCS = struct {
     
-    const GameError = error {} || sdl.ErrorSet;
     
-    const Entity = struct {
-        vtable: *const Vtable,
-        
-        const EntityError = error {} || GameError;
-        
-        const Vtable = struct {
-            const UpdateFn = fn(*      Entity, *      Game) EntityError!void;
-            const DrawFn   = fn(*const Entity, *const Game) EntityError!void;
-            updateFn: UpdateFn,
-            drawFn: DrawFn,
-        };
-        
-        pub fn update(self: *Entity, game: *Game) !void {
-            return self.vtable.updateFn(self, game);
-        }
-        
-        pub fn draw(self: *const Entity, game: *const Game) !void {
-            return self.vtable.drawFn(self, game);
-        }
-        
-        pub fn implement(comptime updateFn: UpdateFn, comptime drawFn: DrawFn) Entity {
-            const Static = struct {
-                const vtable: Vtable = Vtable {
-                    .updateFn = updateFn,
-                    .drawFn   = drawFn,
-                };
-            };
-            return Entity { .vtable = &Static.vtable };
-        }
-        
+    const Components = struct {
+        list: [][]u8,
     };
     
 };
