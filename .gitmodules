@@ -1,0 +1,3 @@
+[submodule "lib/zig-ecs"]
+	path = lib/zig-ecs
+	url = https://github.com/prime31/zig-ecs.git

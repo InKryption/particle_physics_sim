@@ -5,27 +5,46 @@ pub const c = @cImport({
     @cInclude("SDL_image.h");
 });
 
+pub fn init(subsystems: Subsystems, img_subsystems: ImgSubsystems) ErrorSet!void {
+    
+    const flagmask: u32 = blk: {
+        var out: u32 = 0;
+        inline for(@typeInfo(Subsystems).Struct.fields) |field, i| {
+            const value = @field(subsystems, field.name);
+            if ( (bool == field.field_type) and (i <= 9) ) {
+                out |= @as(u32, @boolToInt(value)) << i;
+            }
+        }
+        
+        break:blk out;
+    };
+    
+    const img_flagmask: c_int = blk: {
+        var out: c_int = 0;
+        inline for (@typeInfo(ImgSubsystems).Struct.fields) |field, i| {
+            const value = @field(img_subsystems, field.name);
+            if ( (bool == field.field_type) and (i <= 3) ) {
+                out |= @as(c_int, @boolToInt(value)) << i;
+            }
+        }
+        break :blk out;
+    };
+    
+    if (c.SDL_Init(flagmask) != 0) {
+        return ErrorSet.cantInitSubsystems;
+    }
+    
+    if (c.IMG_Init(img_flagmask) & img_flagmask != img_flagmask) {
+        return ErrorSet.cantInitSubsystems;
+    }
+    
+    
+    
+}
 
-
-pub const ErrorSet = error {
-    cantInitSubsystems,
-    cantCreateWindow,
-    cantCreateRenderer,
-    
-    cantSetBrightness,
-    cantSetFullscreen,
-    cantSetOpacity,
-    
-    cantSetRenderColor,
-    cantClearRenderer,
-    cantRenderLine,
-    cantRenderPoint,
-    cantRenderRect,
-    cantRenderTexture,
-    
-    cantSetTextureAlphaMod,
-    cantSetTextureColorMod,
-};
+pub fn deinit() callconv(.Inline) void {
+    return c.SDL_Quit();
+}
 
 pub const Subsystems = struct {
     timer:          bool = false,
@@ -69,46 +88,25 @@ pub const ImgSubsystems = img_subsystems: {
     break :img_subsystems @Type(.{ .Struct = out });
 };
 
-pub fn init(subsystems: Subsystems, img_subsystems: ImgSubsystems) ErrorSet!void {
+pub const ErrorSet = error {
+    cantInitSubsystems,
+    cantCreateWindow,
+    cantCreateRenderer,
     
-    const flagmask: u32 = blk: {
-        var out: u32 = 0;
-        inline for(@typeInfo(Subsystems).Struct.fields) |field, i| {
-            const value = @field(subsystems, field.name);
-            if ( (bool == field.field_type) and (i <= 9) ) {
-                out |= @as(u32, @boolToInt(value)) << i;
-            }
-        }
-        
-        break:blk out;
-    };
+    cantSetBrightness,
+    cantSetFullscreen,
+    cantSetOpacity,
     
-    const img_flagmask: c_int = blk: {
-        var out: c_int = 0;
-        inline for (@typeInfo(ImgSubsystems).Struct.fields) |field, i| {
-            const value = @field(img_subsystems, field.name);
-            if ( (bool == field.field_type) and (i <= 3) ) {
-                out |= @as(c_int, @boolToInt(value)) << i;
-            }
-        }
-        break :blk out;
-    };
+    cantSetRenderColor,
+    cantClearRenderer,
+    cantRenderLine,
+    cantRenderPoint,
+    cantRenderRect,
+    cantRenderTexture,
     
-    if (c.SDL_Init(flagmask) != 0) {
-        return ErrorSet.cantInitSubsystems;
-    }
-    
-    if (c.IMG_Init(img_flagmask) & img_flagmask != img_flagmask) {
-        return ErrorSet.cantInitSubsystems;
-    }
-    
-    
-    
-}
-
-pub fn deinit() callconv(.Inline) void {
-    return c.SDL_Quit();
-}
+    cantSetTextureAlphaMod,
+    cantSetTextureColorMod,
+};
 
 /// Created by invoking Window.init
 /// Deinitialized by invoking Window.deinit
@@ -519,21 +517,21 @@ pub const Renderer = struct {
         
     }
     
-    pub fn drawRect(self: Self, comptime A: Arithmetic, rect: Rect(A), comptime mode: RectDrawMode) callconv(.Inline) ErrorSet!void {
+    pub fn drawRect(self: Self, comptime A: Arithmetic, comptime mode: RectDrawMode, rect: ?Rect(A)) callconv(.Inline) ErrorSet!void {
         
         const func
-        =    if (A == .i and mode == .Empty) c.SDL_RenderDrawRect
-        else if (A == .f and mode == .Empty) c.SDL_RenderDrawPointF
-        else if (A == .i)                    c.SDL_RenderFillRect
-        else if (A == .f)                    c.SDL_renderFillRectF
+        =    if ( A == .i and mode == .Empty ) c.SDL_RenderDrawRect
+        else if ( A == .f and mode == .Empty ) c.SDL_RenderDrawPointF
+        else if ( A == .i and mode == .Full  ) c.SDL_RenderFillRect
+        else if ( A == .f and mode == .Full  ) c.SDL_renderFillRectF
         else                                 unreachable;
         
-        return if (func(self.handle, rect.cPtr()) == 0)
+        return if (func(self.handle, if (rect) |r| r.cPtr() else null) == 0)
         {} else ErrorSet.cantRenderRect;
         
     }
     
-    pub fn drawRects(self: Self, comptime A: Arithmetic, rects: []const Rect(A), comptime mode: RectDrawMode) callconv(.Inline) ErrorSet!void {
+    pub fn drawRects(self: Self, comptime A: Arithmetic, comptime mode: RectDrawMode, rects: []const Rect(A)) callconv(.Inline) ErrorSet!void {
         
         const func
         =    if (A == .i and mode == .Empty) c.SDL_RenderDrawRects
@@ -623,8 +621,7 @@ pub const Renderer = struct {
 /// Most useful in a while loop paired with a switch case.
 /// e.g. while(Event{}.poll()) |event_type| switch(event_type) {...}.
 pub const Event = struct {
-    const CEvent = c.SDL_Event;
-    
+    pub const CEvent = c.SDL_Event;
     data: CEvent = undefined,
     
     /// Polls event queue. If an event is pending, a Event.PollPayload is returned,
@@ -683,50 +680,6 @@ pub const Event = struct {
         
         break:type_info_blk @Type(.{ .Enum = enum_info }); // Return retified type.
         
-    };
-    
-    /// TODO: Make public once they fix the issue of making a union from a @typeInfo with an enum tag.
-    const Data = comptime type_info_blk: {
-        const raw_union_info = @typeInfo(c.SDL_Event).Union;
-        
-        const DataEnum = @Type(.{ .Enum = .{
-            .layout = .Auto,
-            .decls = &[_]std.builtin.TypeInfo.Declaration{},
-            .tag_type = c_int,
-            .is_exhaustive = true,
-            .fields = union_info_fields_blk: {
-                
-                var enum_info_fields_out: [raw_union_info.fields.len]std.builtin.TypeInfo.EnumField = undefined;
-                for (raw_union_info.fields) |union_field, idx| {
-                    
-                    enum_info_fields_out[idx].name = union_field.name;
-                    enum_info_fields_out[idx].value = idx;
-                    
-                } break :union_info_fields_blk &enum_info_fields_out;
-                
-            },
-        }});
-        
-        const union_info: std.builtin.TypeInfo.Union = .{
-            .layout = .Auto,
-            .decls = &[_]std.builtin.TypeInfo.Declaration{},
-            .tag_type = DataEnum,
-            .fields = union_info_fields_blk: {
-                
-                var union_info_fields_out: [(raw_union_info.fields.len)]std.builtin.TypeInfo.UnionField = undefined;
-                for (raw_union_info.fields) |union_field, idx| {
-                    
-                    union_info_fields_out[idx].field_type = union_field.field_type;
-                    union_info_fields_out[idx].alignment = @alignOf(union_field.field_type);
-                    union_info_fields_out[idx].name = union_field.name;
-                    
-                } break :union_info_fields_blk &union_info_fields_out;
-                
-            },
-            
-        };
-        
-        break :type_info_blk @Type(.{ .Union = union_info });
     };
     
 };
@@ -811,14 +764,16 @@ pub fn CPoint(comptime A: Arithmetic) type {
 
 pub fn Point(comptime A: Arithmetic) type {
     const T = CArithmetic(A);
-    return extern struct {
+    return struct {
         x: T = 0,
         y: T = 0,
         
         const Self = @This();
         
         pub fn cPtr(self: *const Self) *const CPoint(A) {
-            return @ptrCast(*const CPoint(A), self);
+            return &CPoint(A) {
+                .x = self.x, .y = self.y,
+            };
         }
         
     };
@@ -835,14 +790,17 @@ pub fn CRect(comptime A: Arithmetic) type {
 
 pub fn Rect(comptime A: Arithmetic) type {
     const T = CArithmetic(A);
-    return extern struct {
+    return struct {
         x: T = 0, y: T = 0,
         w: T = 0, h: T = 0,
         
         const Self = @This();
         
         pub fn cPtr(self: *const Self) *const CRect(A) {
-            return @ptrCast(*const CRect(A), self);
+            return &CRect(A) {
+                .x = self.x, .y = self.y,
+                .w = self.w, .h = self.h,
+            };
         }
         
     };
@@ -872,7 +830,7 @@ pub fn Size(comptime A: Arithmetic) type {
 
 pub const CColor = c.SDL_Color;
 
-pub const Color = extern struct {
+pub const Color = struct {
     r: u8 = 255,
     g: u8 = 255,
     b: u8 = 255,
@@ -881,7 +839,12 @@ pub const Color = extern struct {
     const Self = @This();
     
     pub fn cPtr(self: *const Color) *const CColor {
-        return @ptrCast(*const CColor, self);
+        return &CColor{
+            .r = self.r,
+            .g = self.g,
+            .b = self.b,
+            .a = self.a,
+        };
     }
     
     pub const white   = Self{ .r = 255, .g = 255, .b = 255 };
@@ -896,6 +859,8 @@ pub const Color = extern struct {
     pub const yellow  = Self{ .r = 255, .g = 255, .b = 0   };
     
 };
+
+
 
 pub const Mouse = struct {
     x: c_int,
@@ -959,14 +924,16 @@ pub const Mouse = struct {
 };
 
 pub const Keyboard = struct {
+    handle: [*]u8,
     
-    pub fn scanCode(scancode: Scancode) bool {
-        const kb = c.SDL_GetKeyboardState(null);
-        const sdl_scancode = @enumToInt(scancode);
-        return kb[@intCast(usize, sdl_scancode)] != 0;
+    pub fn init() @This() {
+        return Keyboard{.handle = c.SDL_GetKeyboardState(null)};
     }
     
-    
+    pub fn scanCode(self: @This(), scancode: Scancode) bool {
+        const sdl_scancode = @enumToInt(scancode);
+        return self.handle[@intCast(usize, sdl_scancode)] != 0;
+    }
     
     /// Mirrors the SDL_Scancode enum, except names are all lowercase, and excludes the 'SDL_SCANCODE' prefix.
     /// For any of the number keys, use @"n" to refer to the enum name. This is a limitation of consistency,
