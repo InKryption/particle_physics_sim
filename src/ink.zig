@@ -2,34 +2,6 @@ const std = @import("std");
 const mem = std.mem;
 const meta = std.meta;
 
-pub const TypeId = enum(usize) {
-    _,
-    
-    pub fn of(comptime T: type) TypeId {
-        return @intToEnum(TypeId, numFor(T));
-    }
-    
-    fn numFor(comptime T: type) usize {
-        
-        const Static = struct {
-            var id: usize = 0;
-            var is_new: bool = true;
-        };
-        
-        if (Static.is_new) {
-            Static.is_new = false;
-            Static.id = counter;
-            counter += 1;
-        }
-        
-        return Static.id;
-        
-    }
-    
-    var counter: usize = 0;
-    
-};
-
 pub const SignalLogic = struct {
     const Self = @This();
     
