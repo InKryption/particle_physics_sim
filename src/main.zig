@@ -7,8 +7,8 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{.verbose_log = true}){};
     defer _ = gpa.deinit();
     
-    //var mempool = std.heap.FixedBufferAllocator.init(try gpa.allocator.alloc(u8, 16_384));
-    //defer gpa.allocator.free(mempool.buffer);
+    var mempool = std.heap.FixedBufferAllocator.init(try gpa.allocator.alloc(u8, 16_384));
+    defer gpa.allocator.free(mempool.buffer);
     
     const Coord = struct {
         x: usize = 0, 
@@ -17,9 +17,9 @@ pub fn main() !void {
     };
     
     var reg = EntityRegistry.Components{};
-    defer reg.deinit(&gpa.allocator);
+    defer reg.deinit(&mempool.allocator);
     
-    _ = try reg.addType(&gpa.allocator, Coord, 1);
+    _ = try reg.addType(&mempool.allocator, Coord, 1);
     const m = reg.getType(Coord).?;
     m.items.ptr[0].x = 0;
     m.items.ptr[0].y = 2;
