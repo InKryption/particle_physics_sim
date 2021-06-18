@@ -10,18 +10,23 @@ pub fn main() !void {
     //var mempool = std.heap.FixedBufferAllocator.init(try gpa.allocator.alloc(u8, 16_384));
     //defer gpa.allocator.free(mempool.buffer);
     
-    var reg: BasicEntityRegistry = .{};
+    const Coord = struct {
+        x: usize = 0, 
+        y: usize = 0, 
+        flag: bool = false
+    };
+    
+    var reg = EntityRegistry.Components{};
     defer reg.deinit(&gpa.allocator);
     
-    const ent1 = reg.create();
-    
-    try reg.emplace(&gpa.allocator, ent1, u16, 32);
-    
-    std.debug.print("{}\n", .{reg.get(ent1, u16).?.*});
+    _ = try reg.addType(&gpa.allocator, Coord, 1);
+    const m = reg.getType(Coord).?;
+    m.items.ptr[0].x = 0;
+    m.items.ptr[0].y = 2;
+    m.items.ptr[0].flag = true;
+    std.debug.print("{}\n", .{m.items.ptr[0]});
     
     if (true) return;
-    
-    
     
     const wnd = try sdl.Window.init(.{.w = 1920 / 1.5, .h = 1080 / 1.5});
     defer wnd.deinit();
@@ -54,122 +59,98 @@ pub fn main() !void {
     }
 }
 
-const BasicEntityRegistry = struct {
-    components: Components = .{},
-    
-    pub fn create(self: @This()) Entity {
-        return Entity.generate();
-    }
-    
-    pub fn emplace(self: *@This(), allocator: *std.mem.Allocator, entity: Entity, comptime T: type, value: T) !void {
-        try self.components.addTypes(allocator, &[_]type{T});
-        
-        const byte_array = self.components.getByteArrayOf(T);
-        const old_len = byte_array.items.len;
-        const new_len = std.math.max((entity.asNum() + 1) * @sizeOf(T), byte_array.items.len);
-        try byte_array.resize(allocator, new_len);
-        
-        self.components.getTypeSliceOf(T)[entity.asNum()] = value;
-        
-    }
-    
-    pub fn get(self: *@This(), entity: Entity, comptime T: type) ?*T {
-        const doesnt_exist = self.components.list.items.len <= Components.TypeId.of(T).asNum();
-        const not_in_slice = doesnt_exist or self.components.getTypeSliceOf(T).len <= entity.asNum();
-        
-        if (doesnt_exist or not_in_slice) return null;
-        return &self.components.getTypeSliceOf(T)[entity.asNum()];
-        
-    }
-    
-    const Entity = enum(usize) {
-        _,
-        
-        pub fn generate() Entity {
-            const Static = struct {
-                var counter: usize = 0;
-            };
-            
-            const out = Static.counter;
-            Static.counter += 1;
-            
-            return @intToEnum(Entity, out);
-        }
-        
-        pub fn asNum(self: Entity) @typeInfo(@This()).Enum.tag_type {
-            return @enumToInt(self);
-        }
-        
-    };
-    
-    pub fn deinit(self: *@This(), allocator: *std.mem.Allocator) void {
-        self.components.deinit(allocator);
-    }
+const EntityRegistry = struct {
+    components: Components,
     
     const Components = struct {
-        list: ComponentList = .{},
+        list: std.ArrayListUnmanaged( std.ArrayListUnmanaged(u8) ) = .{},
         
-        const ListOfComponentBytes = std.ArrayListUnmanaged(u8);
-        const ComponentList = std.ArrayListUnmanaged(ListOfComponentBytes);
         
-        /// Deinitialize the component listing, and all of the component arrays.
+        
+        const ComponentError = error {
+            ComponentDoesntExist,
+            ComponentAlreadyExists,
+        };
+        
+        
+        
+        fn addType(self: *@This(), allocator: *std.mem.Allocator, comptime T: type, init_capacity: usize) !void {
+            
+            const type_id = TypeId.of(T);
+            
+            const old_len = self.list.items.len;
+            const type_id_value = type_id.value();
+            
+            if (type_id_value < old_len)
+            return ComponentError.ComponentAlreadyExists;
+            
+            const new_size = std.math.max( old_len , type_id_value + 1 );
+            try self.list.resize( allocator, new_size );
+            
+            const new_memory = try allocator.allocAdvanced(T, null, init_capacity, .at_least);
+            
+            self.list.items[type_id_value].items.len = 0;
+            self.list.items[type_id_value].capacity  = new_memory.len * @sizeOf(T);
+            
+            self.list.items[type_id_value].items.ptr = @ptrCast([*]u8, new_memory.ptr);
+            
+        }
+        
+        fn getType(self: *@This(), comptime T: type) ?std.ArrayListUnmanaged(T) {
+            
+            const byte_array = self.getBytes(T) orelse return null;
+            var out: std.ArrayListUnmanaged(T) = .{};
+            
+            out.items.ptr = @intToPtr([*]T, @ptrToInt(byte_array.items.ptr));
+            out.items.len = byte_array.items.len / @sizeOf(T);
+            out.capacity = byte_array.capacity / @sizeOf(T);
+            
+            return out;
+            
+        }
+        
+        
+        
+        fn updateBytes(self: *@This(), comptime T: type, with: std.ArrayListUnmanaged(T)) !void {
+            
+            const byte_array = self.getBytes(T) orelse return ComponentError.ComponentDoesntExist;
+            
+            byte_array.items.len = with.items.len * @sizeOf(T);
+            byte_array.capacity = with.capacity * @sizeOf(T);
+            
+        }
+        
+        fn getBytes(self: *@This(), comptime T: type) ?*std.ArrayListUnmanaged(u8) {
+            
+            const type_id = TypeId.of(T);
+            const type_id_value = type_id.value();
+            
+            return if (type_id_value >= self.list.items.len)
+            null else &self.list.items[type_id_value];
+            
+        }
+        
+        
+        
         pub fn deinit(self: *@This(), allocator: *std.mem.Allocator) void {
             
-            for (self.list.items) |*component_list| {
-                component_list.deinit(allocator);
+            for (self.list.items) |*comp_list| {
+                comp_list.expandToCapacity();
+                comp_list.deinit(allocator);
             }
             
             self.list.deinit(allocator);
-        }
-        
-        /// Add types, ensuring space for them, if they are not already registered.
-        pub fn addTypes(self: *@This(), allocator: *std.mem.Allocator, comptime type_list: []const type) !void {
-            
-            const additional_capacity: usize = blk: {
-                
-                var blk_out: usize = 0;
-                
-                inline for (type_list) |Type| {
-                    
-                    const type_count_before = TypeId.typeCount();
-                    _ = TypeId.of(Type);
-                    const type_count_after = TypeId.typeCount();
-                    
-                    const is_new = type_count_after > type_count_before;
-                    
-                    blk_out += @boolToInt(is_new);
-                }
-                
-                break :blk blk_out;
-                
-            };
-            
-            try self.list.appendNTimes(allocator, .{}, additional_capacity);
             
         }
         
-        /// Get the byte array associated with a type.
-        fn getByteArrayOf(self: *@This(), comptime Type: type) *ListOfComponentBytes {
-            const type_idx = TypeId.of(Type).asNum();
-            std.debug.assert(type_idx < self.list.items.len);
-            return &self.list.items[type_idx];
-        }
         
-        /// Get a non-owning slice of specified registered type.
-        fn getTypeSliceOf(self: *@This(), comptime Type: type) []Type {
-            var out: []Type = &[_]Type{};
-            
-            const type_size = @sizeOf(Type);
-            const byte_array = self.getByteArrayOf(Type);
-            
-            out.len = @divExact(byte_array.items.len, type_size);
-            out.ptr = @ptrCast([*]Type, @alignCast(@alignOf(Type), byte_array.items.ptr));
-            
-            return out;
-        }
         
-        pub const TypeId = enum(usize) {
+        const TypeId = enum(usize) {
             _,
+            
+            pub fn value(self: TypeId) usize {
+                return @enumToInt(self);
+            }
             
             pub fn of(comptime T: type) TypeId {
                 
@@ -179,29 +160,20 @@ const BasicEntityRegistry = struct {
                 };
                 
                 if (Static.is_new) {
-                    Static.id = registered_type_count;
-                    registered_type_count += 1;
                     Static.is_new = false;
+                    Static.id = counter;
+                    counter += 1;
                 }
                 
                 return @intToEnum(TypeId, Static.id);
+                
             }
             
-            pub fn asNum(self: @This()) @typeInfo(@This()).Enum.tag_type {
-                return @enumToInt(self);
+            pub fn count() usize {
+                return counter;
             }
             
-            pub fn typeCount() usize {
-                return registered_type_count;
-            }
-            
-            pub fn isMostRecent(type_id: TypeId) bool {
-                return type_id.asNum() + 1 == typeCount();
-            }
-            
-            
-            
-            var registered_type_count: usize = 0;
+            var counter: usize = 0;
             
         };
         
