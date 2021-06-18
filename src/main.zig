@@ -11,20 +11,14 @@ pub fn main() !void {
     defer gpa.allocator.free(mempool.buffer);
     
     const Coord = struct {
-        x: usize = 0, 
-        y: usize = 0, 
-        flag: bool = false
+        x: usize   = 0, 
+        y: usize   = 0, 
     };
     
     var reg = EntityRegistry.Components{};
     defer reg.deinit(&mempool.allocator);
     
-    _ = try reg.addType(&mempool.allocator, Coord, 1);
-    const m = reg.getType(Coord).?;
-    m.items.ptr[0].x = 0;
-    m.items.ptr[0].y = 2;
-    m.items.ptr[0].flag = true;
-    std.debug.print("{}\n", .{m.items.ptr[0]});
+    try reg.addType(&mempool.allocator, Coord, 4);
     
     if (true) return;
     
@@ -61,6 +55,36 @@ pub fn main() !void {
 
 const EntityRegistry = struct {
     components: Components = .{},
+    entities: EntitySet = .{},
+    
+    
+    const EntitySet = struct {
+        counter: usize = 0,
+        dense: []EntityId = []EntityId{},
+        sparse: []*EntityId = []*EntityId{},
+        
+        pub fn generate(self: *@This(), allocator: *std.mem.Allocator) !EntityId {
+            
+            self.dense  = try allocator.reallocAdvanced(self.dense , null, self.dense.len + 1, .at_least);
+            errdefer allocator.free(new_mem_dense);
+            
+            self.sparse = try allocator.reallocAdvanced(self.sparse, null, self.counter      , .at_least );
+            errdefer allocator.free(new_mem_sparse);
+            
+            
+            
+        }
+        
+        const EntityId = enum(usize) {
+            _,
+            
+            pub fn value(self: EntityId) usize {
+                return @enumToInt(self);
+            }
+            
+        };
+        
+    };
     
     const Components = struct {
         list: std.ArrayListUnmanaged( std.ArrayListUnmanaged(u8) ) = .{},
@@ -76,7 +100,8 @@ const EntityRegistry = struct {
         
         fn addType(self: *@This(), allocator: *std.mem.Allocator, comptime T: type, init_capacity: usize) !void {
             
-            const type_id = TypeId.of(T);
+            TypeId.generateFor(T) catch {}; // Ensure that id exists.
+            const type_id = TypeId.getIdAssume(T); // Assume id exists, since we just made sure it does.
             
             const old_len = self.list.items.len;
             const type_id_value = type_id.value();
@@ -101,7 +126,7 @@ const EntityRegistry = struct {
             const byte_array = self.getBytes(T) orelse return null;
             var out: std.ArrayListUnmanaged(T) = .{};
             
-            out.items.ptr = @intToPtr([*]T, @ptrToInt(byte_array.items.ptr));
+            out.items.ptr = @ptrCast([*]T, @alignCast(@alignOf(T), byte_array.items.ptr));
             out.items.len = byte_array.items.len / @sizeOf(T);
             out.capacity = byte_array.capacity / @sizeOf(T);
             
@@ -115,14 +140,14 @@ const EntityRegistry = struct {
             
             const byte_array = self.getBytes(T) orelse return ComponentError.ComponentDoesntExist;
             
-            byte_array.items.len = with.items.len * @sizeOf(T);
-            byte_array.capacity = with.capacity * @sizeOf(T);
+            byte_array.items.len = @sizeOf(T) * with.len;
+            byte_array.capacity  = @sizeOf(T) * with.capacity;
             
         }
         
         fn getBytes(self: *@This(), comptime T: type) ?*std.ArrayListUnmanaged(u8) {
             
-            const type_id = TypeId.of(T);
+            const type_id = TypeId.of(T) catch return null;
             const type_id_value = type_id.value();
             
             return if (type_id_value >= self.list.items.len)
@@ -143,34 +168,40 @@ const EntityRegistry = struct {
             
         }
         
-        
-        
         const TypeId = enum(usize) {
+            None = 0, /// Default, 'invalid' value for an entity.
             _,
             
             pub fn value(self: TypeId) usize {
                 return @enumToInt(self);
             }
             
-            pub fn of(comptime T: type) TypeId {
+            /// Get the the type id if it exists.
+            pub fn of(comptime T: type) ComponentError!TypeId {
+                return if (Static(T).id == .None)
+                ComponentError.ComponentDoesntExist else getIdAssume(T);
+            }
+            
+            /// Generates the type id for type T, unless said type already has an associated id, in which case it errors.
+            pub fn generateFor(comptime T: type) ComponentError!void {
                 
-                const Static = struct {
-                    var id: usize = undefined;
-                    var is_new: bool = true;
-                };
+                if (Static(T).id != .None)
+                return ComponentError.ComponentAlreadyExists;
                 
-                if (Static.is_new) {
-                    Static.is_new = false;
-                    Static.id = counter;
-                    counter += 1;
-                }
-                
-                return @intToEnum(TypeId, Static.id);
+                counter += 1;
+                Static(T).id = @intToEnum(TypeId, counter);
                 
             }
             
-            pub fn count() usize {
-                return counter;
+            /// Returns the type id assuming it already exists. Prefer using 'TypeId.of(T)' which returns an error if the id doesn't exist.
+            pub fn getIdAssume(comptime T: type) TypeId {
+                return Static(T).id;
+            }
+            
+            fn Static(comptime T: type) type {
+                return struct {
+                    var id: TypeId = .None;
+                };
             }
             
             var counter: usize = 0;
@@ -180,3 +211,38 @@ const EntityRegistry = struct {
     };
     
 };
+
+pub fn SparseSet(comptime T: type) type {
+    
+    
+    return struct {
+        const Self = @This();
+        
+        dense: []T = &[_]T{},
+        sparse: []T = &[_]T{},
+        dcapacity: usize = 0,
+        
+        const index_offset = std.math.absCast(std.math.minInt(T)); // Support for signed integers.
+        
+        pub fn contains(self: Self, value: T) bool {
+            @setRuntimeSafety(false);
+            const in_range = value < self.sparse.len;
+            return in_range and self.dense[(self.sparse[ @intCast(usize, value + index_offset) ])] == value;
+        }
+        
+        pub fn add(self: *Self, allocator: *std.mem.Allocator, value: T) !void {
+            
+            const new_len = self.dense.len + 1;
+            self.dense.len = self.dcapacity;
+            self.dense = try allocator.reallocAdvanced(self.dense, null, new_len, .at_least);
+            
+            self.dcapacity = self.dense.len;
+            self.dense.len = new_len;
+            
+            
+            
+        }
+        
+    };
+    
+}
