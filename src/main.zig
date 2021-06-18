@@ -60,7 +60,7 @@ pub fn main() !void {
 }
 
 const EntityRegistry = struct {
-    components: Components,
+    components: Components = .{},
     
     const Components = struct {
         list: std.ArrayListUnmanaged( std.ArrayListUnmanaged(u8) ) = .{},
@@ -111,7 +111,7 @@ const EntityRegistry = struct {
         
         
         
-        fn updateBytes(self: *@This(), comptime T: type, with: std.ArrayListUnmanaged(T)) !void {
+        fn updateBytes(self: *@This(), comptime T: type, with: struct { len: usize, capacity: usize }) !void {
             
             const byte_array = self.getBytes(T) orelse return ComponentError.ComponentDoesntExist;
             
